@@ -213,3 +213,87 @@ impl PasswordAuthenticator {
         })))
     }
 }
+
+/// Authenticates using a username and password with OAuth. See the module-level documentation for
+/// usage.
+pub struct ApplicationOnlyAuthenticator {
+    access_token: Option<String>,
+    client_id: String,
+    device_id: String,
+}
+
+impl Authenticator for ApplicationOnlyAuthenticator {
+    fn login(&mut self, client: &Client, user_agent: &str) -> Result<(), APIError> {
+        let url = "https://www.reddit.com/api/v1/access_token";
+        let body = format!("grant_type=https://oauth.reddit.com/grants/installed_client&device_id={}",
+                           &self.device_id);
+        let access_req = client.post(url)
+            .header(Authorization(Basic {
+                username: self.client_id.to_owned(),
+                password: None,
+            }))
+            .header(UserAgent(user_agent.to_owned()))
+            .body(&body);
+
+        let mut result = access_req.send().unwrap();
+
+        if result.status != hyper::Ok {
+            Err(APIError::HTTPError(result.status))
+        } else {
+            let mut buf = String::new();
+            result.read_to_string(&mut buf).unwrap();
+            let token_response: TokenResponse = serde_json::from_str(&buf).unwrap();
+            self.access_token = Some(token_response.access_token);
+            Ok(())
+        }
+    }
+
+    fn logout(&mut self, client: &Client, user_agent: &str) -> Result<(), APIError> {
+        let url = "https://www.reddit.com/api/v1/revoke_token";
+        let body = format!("token={}", &self.access_token.to_owned().unwrap());
+        let req = client.post(url)
+            .header(Authorization(Basic {
+                username: self.client_id.to_owned(),
+                password: None,
+            }))
+            .header(UserAgent(user_agent.to_owned()))
+            .body(&body);
+        let res = req.send().unwrap();
+        if !res.status.is_success() {
+            Err(APIError::HTTPError(res.status))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn scopes(&self) -> Vec<String> {
+        vec![String::from("*")]
+    }
+
+    fn headers(&self) -> Headers {
+        let mut headers = Headers::new();
+        if let Some(ref token) = self.access_token {
+            headers.set(Authorization(Bearer { token: token.to_owned() }));
+        }
+        headers
+    }
+
+    fn oauth(&self) -> bool {
+        true
+    }
+}
+
+impl ApplicationOnlyAuthenticator {
+    /// Creates a new `ApplicationOnlyAuthenticator`. If you do not have a client ID and secret (or do
+    /// not know what these are), you need to fetch one using the instructions in the module
+    /// documentation.
+    pub fn new(client_id: &str,
+               device_id: &str)
+               -> Arc<Mutex<Box<Authenticator + Send>>> {
+        Arc::new(Mutex::new(Box::new(ApplicationOnlyAuthenticator {
+            client_id: client_id.to_owned(),
+            device_id: device_id.to_owned(),
+            access_token: None,
+        })))
+    }
+}
